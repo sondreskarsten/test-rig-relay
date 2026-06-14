@@ -38,7 +38,7 @@ jobs:
               try: body=urllib.request.urlopen(url,timeout=25).read()
               except Exception as e: return {"kid":kid,"verdict":"error","err":str(e)[:60],"ip":ip}
               dt=round(time.time()-t0,3); kid_in=kid.encode() in body; size=len(body)
-              if size<=26200 or not kid_in:
+              if size<=26200 or b"Det har oppst" in body or b"igjen senere" in body or not kid_in:
                   return {"kid":kid,"verdict":"shell","size":size,"kid_in":kid_in,"ip":ip,"dt":dt}
               (outdir/f"{kid}.html").write_bytes(body)
               return {"kid":kid,"verdict":"ok","size":size,"sha256":hashlib.sha256(body).hexdigest(),"ip":ip,"dt":dt}
