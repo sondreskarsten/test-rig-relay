@@ -7,7 +7,7 @@ on:
         default: '0'
       batch:
         description: 'urls per shard this run'
-        default: '700'
+        default: '3000'
 jobs:
   fetch:
     strategy:
@@ -25,23 +25,26 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, json, time, urllib.request, hashlib, pathlib
-          shard=int(os.environ["SHARD"]); offset=int(os.environ.get("OFFSET","0")); batch=int(os.environ.get("BATCH","700"))
+          from concurrent.futures import ThreadPoolExecutor
+          shard=int(os.environ["SHARD"]); offset=int(os.environ.get("OFFSET","0")); batch=int(os.environ.get("BATCH","3000"))
           ip=urllib.request.urlopen("https://api.ipify.org",timeout=15).read().decode()
           sf=pathlib.Path(f"urls/shard_{shard}.txt")
           if not sf.exists(): print(f"no {sf}"); raise SystemExit(0)
           lines=sf.read_text().splitlines()[offset:offset+batch]
-          print(f"shard {shard} ip={ip} offset={offset} n={len(lines)}")
+          print(f"shard {shard} ip={ip} offset={offset} n={len(lines)} CONC=16")
           outdir=pathlib.Path(f"out/shard_{shard}"); outdir.mkdir(parents=True,exist_ok=True)
-          man=[]; ok=shell=err=0
-          for line in lines:
+          def fetch(line):
               kid,url=line.split("\t",1); t0=time.time()
               try: body=urllib.request.urlopen(url,timeout=25).read()
-              except Exception as e: err+=1; man.append({"kid":kid,"verdict":"error","err":str(e)[:60],"ip":ip}); continue
+              except Exception as e: return {"kid":kid,"verdict":"error","err":str(e)[:60],"ip":ip}
               dt=round(time.time()-t0,3); kid_in=kid.encode() in body; size=len(body)
               if size<=26200 or not kid_in:
-                  shell+=1; man.append({"kid":kid,"verdict":"shell","size":size,"kid_in":kid_in,"ip":ip,"dt":dt}); continue
-              ok+=1; (outdir/f"{kid}.html").write_bytes(body)
-              man.append({"kid":kid,"verdict":"ok","size":size,"sha256":hashlib.sha256(body).hexdigest(),"ip":ip,"dt":dt})
+                  return {"kid":kid,"verdict":"shell","size":size,"kid_in":kid_in,"ip":ip,"dt":dt}
+              (outdir/f"{kid}.html").write_bytes(body)
+              return {"kid":kid,"verdict":"ok","size":size,"sha256":hashlib.sha256(body).hexdigest(),"ip":ip,"dt":dt}
+          with ThreadPoolExecutor(max_workers=16) as ex:
+              man=list(ex.map(fetch, lines))
+          ok=sum(1 for m in man if m['verdict']=='ok'); shell=sum(1 for m in man if m['verdict']=='shell'); err=sum(1 for m in man if m['verdict']=='error')
           (outdir/"_manifest.jsonl").write_text("\n".join(json.dumps(m) for m in man))
           (outdir/"_meta.json").write_text(json.dumps({"shard":shard,"runner_ip":ip,"offset":offset,"processed":len(lines),"ok":ok,"shell":shell,"err":err}))
           print(f"shard {shard} DONE ip={ip} ok={ok} shell={shell} err={err}")
