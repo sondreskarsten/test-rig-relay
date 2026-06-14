@@ -53,4 +53,4 @@ jobs:
         with:
           name: fetch-shard-${{ matrix.shard }}
           path: out/shard_${{ matrix.shard }}
-          retention-days: 1
+          retention-days: 90
