@@ -33,21 +33,36 @@ jobs:
           lines=sf.read_text().splitlines()[offset:offset+batch]
           print(f"shard {shard} ip={ip} offset={offset} n={len(lines)} CONC=16")
           outdir=pathlib.Path(f"out/shard_{shard}"); outdir.mkdir(parents=True,exist_ok=True)
+          M_QUOTA=b"Det er kun mulig"; M_ERR=b"Det har oppst"; M_ERR2=b"igjen senere"
+          M_UGYLDIG=b"Ugyldig kombinasjon"; M_UORG=b"ikke et gyldig organisasjonsnummer"
+          M_INGEN=b"finnes ingen kunngj"
+          import re
+          RE_SIG=re.compile(rb"(Konkursregisteret|L&oslash;s&oslash;reregisteret|Foretaksregisteret|Enhetsregisteret|Regnskapsregisteret|Stiftelsesregisteret|Partiregisteret|Frivillighetsregisteret),\s*\d\d\.\d\d\.\d{4}")
+          def verdict(kid,body):
+              if M_QUOTA in body: return "rate_limited"
+              if M_ERR in body or M_ERR2 in body: return "error_page"
+              if M_UGYLDIG in body: return "invalid_combination"
+              if M_UORG in body: return "invalid_orgnr"
+              if M_INGEN in body: return "no_announcements"
+              if RE_SIG.search(body) or b"Vis alle kunngj" in body: return "content"
+              return "chrome_only"
           def fetch(line):
               kid,url=line.split("\t",1); t0=time.time()
               try: body=urllib.request.urlopen(url,timeout=25).read()
-              except Exception as e: return {"kid":kid,"verdict":"error","err":str(e)[:60],"ip":ip}
-              dt=round(time.time()-t0,3); kid_in=kid.encode() in body; size=len(body)
-              if size<=26200 or b"Det har oppst" in body or b"igjen senere" in body or not kid_in:
-                  return {"kid":kid,"verdict":"shell","size":size,"kid_in":kid_in,"ip":ip,"dt":dt}
-              (outdir/f"{kid}.html").write_bytes(body)
-              return {"kid":kid,"verdict":"ok","size":size,"sha256":hashlib.sha256(body).hexdigest(),"ip":ip,"dt":dt}
+              except Exception as e: return {"kid":kid,"verdict":"fetch_error","err":str(e)[:60],"ip":ip}
+              dt=round(time.time()-t0,3); v=verdict(kid,body)
+              rec={"kid":kid,"verdict":v,"size":len(body),"kid_in":kid.encode() in body,"ip":ip,"dt":dt}
+              if v=="content":
+                  (outdir/f"{kid}.html").write_bytes(body)
+                  rec["sha256"]=hashlib.sha256(body).hexdigest()
+              return rec
           with ThreadPoolExecutor(max_workers=16) as ex:
               man=list(ex.map(fetch, lines))
-          ok=sum(1 for m in man if m['verdict']=='ok'); shell=sum(1 for m in man if m['verdict']=='shell'); err=sum(1 for m in man if m['verdict']=='error')
+          from collections import Counter
+          c=Counter(m["verdict"] for m in man)
           (outdir/"_manifest.jsonl").write_text("\n".join(json.dumps(m) for m in man))
-          (outdir/"_meta.json").write_text(json.dumps({"shard":shard,"runner_ip":ip,"offset":offset,"processed":len(lines),"ok":ok,"shell":shell,"err":err}))
-          print(f"shard {shard} DONE ip={ip} ok={ok} shell={shell} err={err}")
+          (outdir/"_meta.json").write_text(json.dumps({"shard":shard,"runner_ip":ip,"offset":offset,"processed":len(lines),"counts":dict(c)}))
+          print(f"shard {shard} DONE ip={ip} {dict(c)}")
           PY
       - uses: actions/upload-artifact@v4
         with:
